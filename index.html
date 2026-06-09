@@ -294,28 +294,51 @@ async function runScan(){
   setProg(0);log(`Scanning ${total} IP(s) with ${keys.length} key(s), ${conc} parallel...`);
 
   let done=0,reported=0,errors=0,idx=0;
-  async function worker(wi){
-    while(idx<list.length && !CANCEL){
-      const myIdx=idx++;const ip=list[myIdx];const key=keys[myIdx%keys.length];
-      try{
-        const resp=await fetch('/api/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ip,key,maxAge})});
-        if(resp.status===429){log(`429 rate-limited on ${ip} - waiting 5s`);await sleep(5000);idx--;continue;}
-        const j=await resp.json();
-        if(resp.ok && j && j.data){
-          const d=j.data;
-          if(d.abuseConfidenceScore>=minScore){
-            DATA.push({IP:d.ipAddress,AbuseScore:+d.abuseConfidenceScore,Reports:+d.totalReports,Country:d.countryCode||'',ISP:d.isp||'',LastReported:d.lastReportedAt||''});
-            if(d.abuseConfidenceScore>0){reported++;$('sReported').textContent=reported;}
-            if(d.abuseConfidenceScore>=25)log(`${d.ipAddress}  score=${d.abuseConfidenceScore}  ${d.countryCode||''}`);
+  const exhausted=new Set();let abort=false;        // keys that hit their daily limit
+  async function worker(){
+    while(idx<list.length && !CANCEL && !abort){
+      const myIdx=idx++;const ip=list[myIdx];
+      let ok=false,attempts=0;
+      while(attempts<4 && !CANCEL && !abort){
+        attempts++;
+        // pick a key that still has quota (round-robin, skip exhausted)
+        let key=null;for(let t=0;t<keys.length;t++){const c=keys[(myIdx+t)%keys.length];if(!exhausted.has(c)){key=c;break;}}
+        if(!key){abort=true;break;}
+        try{
+          const resp=await fetch('/api/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ip,key,maxAge})});
+          if(resp.status===429){
+            const j=await resp.json().catch(()=>null);
+            const det=(j&&j.errors&&j.errors[0]&&j.errors[0].detail)||'';
+            if(/daily|exceeded/i.test(det)||keys.length===1){           // daily quota gone for this key
+              if(!exhausted.has(key)){exhausted.add(key);log(`Key *${key.slice(-4)} is out of daily quota (${exhausted.size}/${keys.length} keys used up).`);}
+              continue;                                                  // try another key (or abort if none)
+            }
+            await sleep(2500);continue;                                  // short burst limit -> brief wait
           }
-        } else { errors++;$('sErr').textContent=errors; if(j&&j.errors)log(`${ip}: ${(j.errors[0]&&j.errors[0].detail)||'error'}`); }
-      }catch(e){errors++;$('sErr').textContent=errors;}
+          const j=await resp.json();
+          if(resp.ok && j && j.data){
+            const d=j.data;
+            if(d.abuseConfidenceScore>=minScore){
+              DATA.push({IP:d.ipAddress,AbuseScore:+d.abuseConfidenceScore,Reports:+d.totalReports,Country:d.countryCode||'',ISP:d.isp||'',LastReported:d.lastReportedAt||''});
+              if(d.abuseConfidenceScore>0){reported++;$('sReported').textContent=reported;}
+              if(d.abuseConfidenceScore>=25)log(`${d.ipAddress}  score=${d.abuseConfidenceScore}  ${d.countryCode||''}`);
+            }
+            ok=true;break;
+          } else {
+            const det=(j&&j.errors&&j.errors[0]&&j.errors[0].detail)||('HTTP '+resp.status);
+            log(`${ip}: ${det}`);ok=true;break;                          // non-429 error: record, move on
+          }
+        }catch(e){await sleep(800);}                                     // network hiccup -> retry within cap
+      }
+      if(!ok && !abort){errors++;$('sErr').textContent=errors;}
       done++;$('sDone').textContent=done;setProg(done/total*100);
     }
   }
-  const pool=[];for(let w=0;w<conc;w++)pool.push(worker(w));
+  const pool=[];for(let w=0;w<conc;w++)pool.push(worker());
   await Promise.all(pool);
-  log(CANCEL?`Stopped at ${done}/${total}.`:`Done. ${done} checked, ${DATA.length} kept, ${reported} reported, ${errors} errors.`);
+  if(abort)log('STOPPED: all keys are out of their daily quota (1000/key/day, resets at midnight UTC). Add fresh keys or try tomorrow.');
+  log(CANCEL?`Stopped at ${done}/${total}.`:`Done. ${done} processed, ${DATA.length} kept, ${reported} reported, ${errors} errors.`);
+  if(abort)toast('All keys hit their daily limit');
   finishScan();
 }
 function setProg(p){p=Math.min(100,p);$('progFill').style.width=p+'%';$('progPct').textContent=Math.round(p)+'%';}
