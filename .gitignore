@@ -1,0 +1,16 @@
+# Never commit secrets or real scan data
+keys.txt
+*.key
+abuseipdb-results.csv
+abuseipdb-part-*.csv
+abuseipdb-filtered.csv
+
+# Tooling / scripts live elsewhere, keep them out of the public site
+*.ps1
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.vercel
+node_modules/
