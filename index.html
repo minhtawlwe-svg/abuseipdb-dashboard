@@ -248,32 +248,42 @@ const fColor=s=>s>=75?'var(--red)':s>=25?'var(--orange)':s>0?'var(--yellow)':'va
 function isIPv4(ip){const p=ip.split('.');if(p.length!==4)return false;return p.every(o=>/^\d+$/.test(o)&&+o>=0&&+o<=255);}
 function ipToInt(ip){return ip.split('.').reduce((a,o)=>(a*256+ +o)>>>0,0);}
 function intToIp(n){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');}
-function expandCidr(cidr){
-  const [base,pfxS]=cidr.split('/');const pfx=+pfxS;
-  if(!isIPv4(base)||pfx<0||pfx>32)return [];
-  const ipInt=ipToInt(base),count=Math.pow(2,32-pfx)>>>0;
-  const mask=pfx===0?0:(0xFFFFFFFF<<(32-pfx))>>>0;const net=(ipInt&mask)>>>0;
-  let start,end;
-  if(pfx<=30){start=(net+1)>>>0;end=(net+count-2)>>>0;}else{start=net;end=(net+count-1)>>>0;}
-  const out=[];for(let c=start;c<=end;c++)out.push(intToIp(c>>>0));return out;
-}
-function parseTargets(text){
-  const out=[];const bad=[];
+function cidrUsableCount(pfx){if(pfx>=31)return pfx===32?1:2;return Math.pow(2,32-pfx)-2;}
+// Cheap count WITHOUT building any array (used for the live estimate while typing).
+function targetCount(text){let n=0;const bad=[];
   text.split(/\r?\n/).forEach(line=>{const l=line.trim();if(!l||l.startsWith('#'))return;
-    if(l.includes('/')){const e=expandCidr(l);if(e.length)out.push(...e);else bad.push(l);}
-    else if(isIPv4(l))out.push(l);else bad.push(l);});
+    if(l.includes('/')){const i=l.indexOf('/'),b=l.slice(0,i),p=l.slice(i+1);const pfx=+p;
+      if(isIPv4(b)&&p!==''&&/^\d+$/.test(p)&&pfx>=0&&pfx<=32)n+=cidrUsableCount(pfx);else bad.push(l);}
+    else if(isIPv4(l))n++;else bad.push(l);});
+  return {count:n,bad};}
+// Expand a CIDR to usable host IPs, but never build more than `cap` (prevents freezes on tiny prefixes).
+function expandCidr(cidr,cap){cap=cap||100000;
+  const i=cidr.indexOf('/'),base=cidr.slice(0,i),pfxS=cidr.slice(i+1);const pfx=+pfxS;
+  if(!isIPv4(base)||pfxS===''||!/^\d+$/.test(pfxS)||pfx<0||pfx>32)return [];
+  const ipInt=ipToInt(base);const mask=pfx===0?0:(0xFFFFFFFF<<(32-pfx))>>>0;const net=(ipInt&mask)>>>0;
+  const total=Math.pow(2,32-pfx);
+  let start,end;if(pfx<=30){start=net+1;end=net+total-2;}else{start=net;end=net+total-1;}
+  const out=[];for(let c=start;c<=end&&out.length<cap;c++)out.push(intToIp(c>>>0));return out;
+}
+function parseTargets(text,cap){cap=cap||100000;const out=[];const bad=[];
+  const lines=text.split(/\r?\n/);
+  for(const line of lines){const l=line.trim();if(!l||l.startsWith('#'))continue;
+    if(l.includes('/')){const e=expandCidr(l,cap-out.length);if(e.length)out.push(...e);else bad.push(l);}
+    else if(isIPv4(l))out.push(l);else bad.push(l);
+    if(out.length>=cap)break;}
   return {ips:[...new Set(out)],bad};
 }
 
 /* ---------- the scan ---------- */
 async function runScan(){
-  const {ips,bad}=parseTargets($('ranges').value);
-  const keys=$('keys').value.split(/\r?\n/).map(k=>k.trim()).filter(k=>k&&!k.startsWith('#'));
   const maxAge=+$('maxAge').value, minScore=+$('minScore').value, conc=Math.max(1,+$('conc').value||6), maxIps=+$('maxIps').value||2000;
+  const {count:wanted}=targetCount($('ranges').value);
+  const {ips,bad}=parseTargets($('ranges').value, maxIps);
+  const keys=$('keys').value.split(/\r?\n/).map(k=>k.trim()).filter(k=>k&&!k.startsWith('#'));
   if(!ips.length){toast('Enter at least one valid IP or range');return;}
   if(!keys.length){toast('Enter at least one API key');return;}
   let list=ips;
-  if(list.length>maxIps){toast(`Capped to first ${maxIps} of ${list.length} IPs`);list=list.slice(0,maxIps);}
+  if(wanted>list.length){toast(`Capped to ${list.length.toLocaleString()} of ${wanted.toLocaleString()} IPs (raise "Max IPs")`);}
   if(bad.length)log(`Skipped ${bad.length} invalid entr${bad.length>1?'ies':'y'}: ${bad.slice(0,5).join(', ')}`);
 
   DATA=[];CANCEL=false;
@@ -412,8 +422,8 @@ $('search').addEventListener('input',render);
 $('countrySel').addEventListener('change',render);
 document.querySelectorAll('#tbl th').forEach(th=>th.addEventListener('click',()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='AbuseScore'||k==='Reports')?-1:1;}document.querySelectorAll('#tbl th .ar').forEach(a=>a.textContent='');th.querySelector('.ar').textContent=sortDir<0?'▼':'▲';render();}));
 // live estimate
-function est(){const {ips}=parseTargets($('ranges').value);const keys=$('keys').value.split(/\r?\n/).filter(k=>k.trim()&&!k.startsWith('#')).length;
-  $('estimate').textContent=ips.length?`${ips.length} IP(s)${keys?` across ${keys} key(s)`:''}`:'';}
+function est(){const {count}=targetCount($('ranges').value);const keys=$('keys').value.split(/\r?\n/).filter(k=>k.trim()&&!k.startsWith('#')).length;
+  $('estimate').textContent=count?`${count.toLocaleString()} IP(s)${keys?` across ${keys} key(s)`:''}`:'';}
 $('ranges').addEventListener('input',est);$('keys').addEventListener('input',est);
 </script>
 </body>
