@@ -1,41 +1,40 @@
-# AbuseIPDB Intelligence Dashboard
+# AbuseIPDB Intelligence Scanner
 
-A modern, **fully client-side** dashboard for visualising [AbuseIPDB](https://www.abuseipdb.com/)
-bulk IP-range scan results. Drop in a CSV and get an instant verdict, smart insights,
+A web app to **scan IP addresses and CIDR ranges against [AbuseIPDB](https://www.abuseipdb.com/)
+right in your browser**, then explore the results with an instant verdict, smart insights,
 a risk pie chart, score distribution, and a searchable/sortable table.
 
-**Everything runs in your browser — no data is ever uploaded.**
-
-## Live demo
-Loads bundled `sample-results.csv` automatically so you can try it with one click.
-
-## Use it with your own data
-1. Open the site (or `index.html` locally).
-2. Drag your `abuseipdb-results.csv` onto the page, or click **Load CSV**.
-3. Explore: filter chips (All / Reported / Suspicious / Malicious), search,
-   click a pie slice or stat card to filter, click an IP to copy it, **Export** the
-   filtered rows.
-
-### CSV format
-Header row plus these columns (extra columns are ignored):
-
-```
-IP,AbuseScore,Reports,Country,LastReported,ISP,UsageType
-```
-
-This is exactly what the companion PowerShell scanners produce. The scanner
-scripts and any API keys are **not** part of this repo by design.
+## How it works
+- Enter IPs / CIDR ranges (one per line) and one or more **AbuseIPDB API keys**.
+- The browser fans the lookups out in parallel, distributing them across your keys
+  (more keys = faster + higher daily limit; each free key allows 1000 checks/day).
+- Because browsers can't call the AbuseIPDB API directly (CORS), requests go through a
+  tiny **Vercel serverless proxy** (`/api/check`). Your keys are forwarded to AbuseIPDB
+  and **never stored or logged**.
+- Results render live; you can filter, sort, copy IPs, and **export to CSV**.
+- You can also **Load CSV** to view a previously exported scan instead of scanning.
 
 ## Features
+- Parallel client-side scanning with multi-key load balancing + live progress
 - Auto **verdict banner** + plain-language **smart insights**
 - Interactive **donut** risk breakdown (hover + click-to-filter)
 - Score-distribution bars, top-countries, animated stat cards
-- Search, multi-filter, column sorting, copy-IP, export-filtered-CSV
-- Slide-in help guide, responsive, offline, zero dependencies
+- Search, filter chips (All / Reported / Suspicious / Malicious), column sorting
+- Copy-IP, export-filtered-CSV, slide-in help guide, responsive, zero front-end deps
+
+## CSV format (for Load CSV / exports)
+```
+IP,AbuseScore,Reports,Country,LastReported,ISP
+```
 
 ## Deploy
-Static site — no build step. Works on Vercel, Netlify, GitHub Pages, or any static host.
-On Vercel: import the repo, framework preset **Other**, no build command, output = root.
+Static front-end + one serverless function — deploys on Vercel with zero config
+(the `/api` folder is auto-detected as a Node serverless function). No build step.
+
+## Security notes
+- Use **your own** API keys. They are sent only to this project's proxy to reach AbuseIPDB.
+- The proxy does not persist keys or results.
+- Each free AbuseIPDB key is limited to 1000 checks/day.
 
 ## License
 MIT
